@@ -327,8 +327,9 @@ impl<'tcx> TypeFoldable<'tcx> for &'tcx Substs<'tcx> {
     fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
                                                               -> Result<Self, F::Error>
     {
-        let params = self.iter().map(|k| k.fold_with(folder))
-            .collect::<Result<SmallVec<[_; 8]>, _>>()?;
+        let params = self.iter().map(|k| {
+            folder.fold_with_variance(ty::Invariant, k)
+        }).collect::<Result<SmallVec<[_; 8]>, _>>()?;
 
         // If folding doesn't change the substs, it's faster to avoid
         // calling `mk_substs` and instead reuse the existing substs.
@@ -344,6 +345,27 @@ impl<'tcx> TypeFoldable<'tcx> for &'tcx Substs<'tcx> {
             t.visit_with(visitor)?;
         }
         Ok(())
+    }
+}
+
+pub fn fold_with_variances<'gcx, 'tcx, F: TypeFolder<'gcx, 'tcx>>(
+    folder: &mut F,
+    variances: &[ty::Variance],
+    substs: &'tcx Substs<'tcx>)
+    -> Result<&'tcx Substs<'tcx>, F::Error>
+{
+    assert_eq!(substs.len(), variances.len());
+
+    let params = substs.iter().zip(variances.iter()).map(|(k, v)| {
+        folder.fold_with_variance(*v, k)
+    }).collect::<Result<SmallVec<[_; 8]>, _>>()?;
+
+    // If folding doesn't change the substs, it's faster to avoid
+    // calling `mk_substs` and instead reuse the existing substs.
+    if params[..] == substs[..] {
+        Ok(substs)
+    } else {
+        Ok(folder.tcx().intern_substs(&params))
     }
 }
 
