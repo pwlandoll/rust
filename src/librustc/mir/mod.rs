@@ -1906,10 +1906,16 @@ pub enum Place<'tcx> {
 
 /// The `DefId` of a static, along with its normalized type (which is
 /// stored to avoid requiring normalization when reading MIR).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct Static<'tcx> {
     pub def_id: DefId,
     pub ty: Ty<'tcx>,
+}
+
+BraceStructTypeFoldableImpl! {
+    impl<'tcx> TypeFoldable<'tcx> for Static<'tcx> {
+        def_id, ty
+    }
 }
 
 impl_stable_hash_for!(struct Static<'tcx> {
@@ -3285,23 +3291,12 @@ impl<'tcx> TypeFoldable<'tcx> for Terminator<'tcx> {
     }
 }
 
-impl<'tcx> TypeFoldable<'tcx> for Place<'tcx> {
-    // TODO: this doesn't look correct!
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
-                                                              -> Result<Self, F::Error>
-    {
-        match self {
-            &Place::Projection(ref p) => Ok(Place::Projection(p.fold_with(folder)?)),
-            _ => Ok(self.clone()),
-        }
-    }
-
-    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> Result<(), V::Error> {
-        if let &Place::Projection(ref p) = self {
-            p.visit_with(visitor)
-        } else {
-            Ok(())
-        }
+EnumTypeFoldableImpl! {
+    impl<'tcx> TypeFoldable<'tcx> for Place<'tcx> {
+        (Place::Local)(local),
+        (Place::Static)(statik),
+        (Place::Promoted)(promoted),
+        (Place::Projection)(projection),
     }
 }
 
@@ -3425,8 +3420,6 @@ where
         }
     }
 }
-
-CloneTypeFoldableImpls! { Field, }
 
 BraceStructTypeFoldableImpl! {
     impl<'tcx> TypeFoldable<'tcx> for Constant<'tcx> {
