@@ -2624,7 +2624,9 @@ impl<'tcx> UserTypeProjection<'tcx> {
 CloneTypeFoldableAndLiftImpls! { ProjectionKind<'tcx>, }
 
 impl<'tcx> TypeFoldable<'tcx> for UserTypeProjection<'tcx> {
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F) -> Result<Self, F::Error> {
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
+                                                              -> Result<Self, F::Error>
+    {
         use crate::mir::ProjectionElem::*;
 
         let base = self.base.fold_with(folder)?;
@@ -3115,7 +3117,9 @@ EnumTypeFoldableImpl! {
 }
 
 impl<'tcx> TypeFoldable<'tcx> for Terminator<'tcx> {
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F) -> Result<Self, F::Error> {
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
+                                                              -> Result<Self, F::Error>
+    {
         use crate::mir::TerminatorKind::*;
 
         let kind = match self.kind {
@@ -3283,7 +3287,9 @@ impl<'tcx> TypeFoldable<'tcx> for Terminator<'tcx> {
 
 impl<'tcx> TypeFoldable<'tcx> for Place<'tcx> {
     // TODO: this doesn't look correct!
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F) -> Result<Self, F::Error> {
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
+                                                              -> Result<Self, F::Error>
+    {
         match self {
             &Place::Projection(ref p) => Ok(Place::Projection(p.fold_with(folder)?)),
             _ => Ok(self.clone()),
@@ -3300,7 +3306,9 @@ impl<'tcx> TypeFoldable<'tcx> for Place<'tcx> {
 }
 
 impl<'tcx> TypeFoldable<'tcx> for Rvalue<'tcx> {
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F) -> Result<Self, F::Error> {
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
+                                                              -> Result<Self, F::Error>
+    {
         use crate::mir::Rvalue::*;
         Ok(match *self {
             Use(ref op) => Use(op.fold_with(folder)?),
@@ -3389,7 +3397,9 @@ where
     V: TypeFoldable<'tcx>,
     T: TypeFoldable<'tcx>,
 {
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F) -> Result<Self, F::Error> {
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
+                                                              -> Result<Self, F::Error>
+    {
         use crate::mir::ProjectionElem::*;
 
         let base = self.base.fold_with(folder)?;
