@@ -13,6 +13,7 @@ use crate::ty::TyKind::*;
 use crate::ty::layout::{Integer, IntegerExt};
 use crate::util::common::ErrorReported;
 use crate::middle::lang_items;
+use crate::mir::interpret::GlobalId;
 
 use rustc_data_structures::stable_hasher::{StableHasher, HashStable};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -659,7 +660,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                 } else if self.seen_opaque_tys.insert(def_id) {
                     let generic_ty = self.tcx.type_of(def_id);
                     let concrete_ty = generic_ty.subst(self.tcx, substs);
-                    let expanded_ty = self.fold_ty(concrete_ty);
+                    let Ok(expanded_ty) = self.fold_ty(concrete_ty);
                     self.seen_opaque_tys.remove(&def_id);
                     Some(expanded_ty)
                 } else {
@@ -672,13 +673,15 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         }
 
         impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for OpaqueTypeExpander<'a, 'gcx, 'tcx> {
+            type Error = !;
+
             fn tcx(&self) -> TyCtxt<'_, 'gcx, 'tcx> {
                 self.tcx
             }
 
-            fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
+            fn fold_ty(&mut self, t: Ty<'tcx>) -> Result<Ty<'tcx>, !> {
                 if let ty::Opaque(def_id, substs) = t.sty {
-                    self.expand_opaque_ty(def_id, substs).unwrap_or(t)
+                    Ok(self.expand_opaque_ty(def_id, substs).unwrap_or(t))
                 } else {
                     t.super_fold_with(self)
                 }
@@ -696,6 +699,42 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             Err(expanded_type)
         } else {
             Ok(expanded_type)
+        }
+    }
+
+    pub fn force_eval_array_length(self, x: ty::LazyConst<'tcx>) ->  Result<u64, ErrorReported> {
+        match x {
+            ty::LazyConst::Unevaluated(def_id, substs) => {
+                // FIXME(eddyb) get the right param_env.
+                let param_env = ty::ParamEnv::empty();
+                if let Some(substs) = self.lift_to_global(&substs) {
+                    let instance = ty::Instance::resolve(
+                        self.global_tcx(),
+                        param_env,
+                        def_id,
+                        substs,
+                    );
+                    if let Some(instance) = instance {
+                        let cid = GlobalId {
+                            instance,
+                            promoted: None
+                        };
+                        if let Some(s) = self.const_eval(param_env.and(cid))
+                            .ok()
+                            .map(|c| c.unwrap_usize(self)) {
+                                return Ok(s)
+                            }
+                    }
+                }
+                self.sess.delay_span_bug(self.def_span(def_id),
+                                         "array length could not be evaluated");
+                Err(ErrorReported)
+            }
+            ty::LazyConst::Evaluated(c) => c.assert_usize(self).ok_or_else(|| {
+                self.sess.delay_span_bug(DUMMY_SP,
+                                         "array length could not be evaluated");
+                ErrorReported
+            })
         }
     }
 }

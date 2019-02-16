@@ -129,14 +129,16 @@ impl<'a, 'tcx> Lift<'tcx> for Kind<'a> {
 }
 
 impl<'tcx> TypeFoldable<'tcx> for Kind<'tcx> {
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F) -> Self {
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
+                                                              -> Result<Self, F::Error>
+    {
         match self.unpack() {
-            UnpackedKind::Lifetime(lt) => lt.fold_with(folder).into(),
-            UnpackedKind::Type(ty) => ty.fold_with(folder).into(),
+            UnpackedKind::Lifetime(lt) => lt.fold_with(folder).map(|a| a.into()),
+            UnpackedKind::Type(ty) => ty.fold_with(folder).map(|a| a.into()),
         }
     }
 
-    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool {
+    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> Result<(), V::Error> {
         match self.unpack() {
             UnpackedKind::Lifetime(lt) => lt.visit_with(visitor),
             UnpackedKind::Type(ty) => ty.visit_with(visitor),
@@ -324,20 +326,48 @@ impl<'a, 'gcx, 'tcx> Substs<'tcx> {
 }
 
 impl<'tcx> TypeFoldable<'tcx> for &'tcx Substs<'tcx> {
-    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F) -> Self {
-        let params: SmallVec<[_; 8]> = self.iter().map(|k| k.fold_with(folder)).collect();
+    fn super_fold_with<'gcx: 'tcx, F: TypeFolder<'gcx, 'tcx>>(&self, folder: &mut F)
+                                                              -> Result<Self, F::Error>
+    {
+        let params = self.iter().map(|k| {
+            folder.fold_with_variance(ty::Invariant, k)
+        }).collect::<Result<SmallVec<[_; 8]>, _>>()?;
 
         // If folding doesn't change the substs, it's faster to avoid
         // calling `mk_substs` and instead reuse the existing substs.
         if params[..] == self[..] {
-            self
+            Ok(self)
         } else {
-            folder.tcx().intern_substs(&params)
+            Ok(folder.tcx().intern_substs(&params))
         }
     }
 
-    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool {
-        self.iter().any(|t| t.visit_with(visitor))
+    fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> Result<(), V::Error> {
+        for t in self.iter() {
+            t.visit_with(visitor)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn fold_with_variances<'gcx, 'tcx, F: TypeFolder<'gcx, 'tcx>>(
+    folder: &mut F,
+    variances: &[ty::Variance],
+    substs: &'tcx Substs<'tcx>)
+    -> Result<&'tcx Substs<'tcx>, F::Error>
+{
+    assert_eq!(substs.len(), variances.len());
+
+    let params = substs.iter().zip(variances.iter()).map(|(k, v)| {
+        folder.fold_with_variance(*v, k)
+    }).collect::<Result<SmallVec<[_; 8]>, _>>()?;
+
+    // If folding doesn't change the substs, it's faster to avoid
+    // calling `mk_substs` and instead reuse the existing substs.
+    if params[..] == substs[..] {
+        Ok(substs)
+    } else {
+        Ok(folder.tcx().intern_substs(&params))
     }
 }
 
@@ -374,7 +404,8 @@ impl<'tcx, T:TypeFoldable<'tcx>> Subst<'tcx> for T {
                                        root_ty: None,
                                        ty_stack_depth: 0,
                                        binders_passed: 0 };
-        (*self).fold_with(&mut folder)
+        let Ok(res) = (*self).fold_with(&mut folder);
+        res
     }
 }
 
@@ -399,22 +430,26 @@ struct SubstFolder<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
 }
 
 impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for SubstFolder<'a, 'gcx, 'tcx> {
+    type Error = !;
+
     fn tcx<'b>(&'b self) -> TyCtxt<'b, 'gcx, 'tcx> { self.tcx }
 
-    fn fold_binder<T: TypeFoldable<'tcx>>(&mut self, t: &ty::Binder<T>) -> ty::Binder<T> {
+    fn fold_binder<T: TypeFoldable<'tcx>>(&mut self, t: &ty::Binder<T>)
+                                          -> Result<ty::Binder<T>, !>
+    {
         self.binders_passed += 1;
         let t = t.super_fold_with(self);
         self.binders_passed -= 1;
         t
     }
 
-    fn fold_region(&mut self, r: ty::Region<'tcx>) -> ty::Region<'tcx> {
+    fn fold_region(&mut self, r: ty::Region<'tcx>) -> Result<ty::Region<'tcx>, !> {
         // Note: This routine only handles regions that are bound on
         // type declarations and other outer declarations, not those
         // bound in *fn types*. Region substitution of the bound
         // regions that appear in a function signature is done using
         // the specialized routine `ty::replace_late_regions()`.
-        match *r {
+        Ok(match *r {
             ty::ReEarlyBound(data) => {
                 let r = self.substs.get(data.index as usize).map(|k| k.unpack());
                 match r {
@@ -435,12 +470,12 @@ impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for SubstFolder<'a, 'gcx, 'tcx> {
                 }
             }
             _ => r
-        }
+        })
     }
 
-    fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
+    fn fold_ty(&mut self, t: Ty<'tcx>) -> Result<Ty<'tcx>, !> {
         if !t.needs_subst() {
-            return t;
+            return Ok(t);
         }
 
         // track the root type we were asked to substitute
@@ -452,7 +487,7 @@ impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for SubstFolder<'a, 'gcx, 'tcx> {
 
         let t1 = match t.sty {
             ty::Param(p) => {
-                self.ty_for_param(p, t)
+                Ok(self.ty_for_param(p, t))
             }
             _ => {
                 t.super_fold_with(self)
